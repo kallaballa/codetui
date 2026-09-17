@@ -41,19 +41,12 @@ async def test_tool_manager_initialize_connect_server():
     mock_list_result = MagicMock()
     mock_list_result.tools = [mock_tool]
 
-    mock_session = MagicMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.send_initialized = AsyncMock()
-    mock_session.send_request = AsyncMock(return_value=mock_list_result)
-    mock_session.list_tools = AsyncMock(return_value=mock_list_result)
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_list_result)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("codetui.tools.stdio_client") as mock_stdio_client, \
-         patch("codetui.tools.ClientSession", return_value=mock_session):
-        mock_context = MagicMock()
-        mock_context.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
-        mock_context.__aexit__ = AsyncMock(return_value=False)
-        mock_stdio_client.return_value = mock_context
-
+    with patch("codetui.tools.Client", return_value=mock_client):
         mgr = MCPToolManager()
         mgr._config = {
             "mcpServers": {
@@ -67,7 +60,7 @@ async def test_tool_manager_initialize_connect_server():
 
 def test_tool_manager_call_tool_fallback():
     mgr = MCPToolManager()
-    mgr._sessions = []
+    mgr._clients = []
     result = asyncio_get_event_loop().run_until_complete(mgr.call_tool("missing", {}))
     assert result == "Tool 'missing' not found or unavailable."
 

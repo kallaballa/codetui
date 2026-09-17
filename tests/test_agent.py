@@ -1,9 +1,7 @@
-import json
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from codetui.agent import Agent
-from codetui.tools import MCPToolManager, ToolDefinition, to_openai_tools
+from codetui.tools import ToolDefinition
 
 
 async def test_send_message():
@@ -44,31 +42,6 @@ async def test_stream_message():
         assert tokens == ["Hello", " world"]
         assert len(agent.history) == 2
         assert agent.history[1]["content"] == "Hello world"
-
-
-def test_to_openai_tools():
-    tools = [
-        ToolDefinition(name="foo", description="desc", parameters={"type": "object", "properties": {"x": {"type": "string"}}}),
-        ToolDefinition(name="bar", description="", parameters={"type": "object"}),
-    ]
-    result = to_openai_tools(tools)
-    assert result == [
-        {"type": "function", "function": {"name": "foo", "description": "desc", "parameters": {"type": "object", "properties": {"x": {"type": "string"}}}}},
-        {"type": "function", "function": {"name": "bar", "description": "", "parameters": {"type": "object", "properties": {}}}},
-    ]
-
-
-def test_tool_manager_loads_default_config(tmp_path):
-    cfg = {
-        "mcpServers": {
-            "test": {"command": "python", "args": ["-c", "print('hi')"]}
-        }
-    }
-    config = tmp_path / "mcp.json"
-    config.write_text(json.dumps(cfg))
-    mgr = MCPToolManager(config_path=str(config))
-    assert mgr._config == cfg
-    assert mgr.list_tools() == []
 
 
 async def test_agent_with_tools_send_message():

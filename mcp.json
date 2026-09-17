@@ -38,9 +38,15 @@
     },
     "serena": {
       "command": "serena",
-        "args": [
-          "start-mcp-server"
-        ]
-      }
+      "args": [
+        "start-mcp-server",
+        "--project",
+        "/home/elchaschab/devel/codetui",
+        "--context",
+        "ide-assistant",
+        "--transport",
+        "stdio"
+      ]
+    }
    }
 }

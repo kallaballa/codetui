@@ -1,12 +1,13 @@
 import asyncio
 import json
 import os
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
-from mcp import Tool
-from mcp.client.session import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
+from mcp import Client
+from mcp.client.stdio import StdioServerParameters
+from mcp.types import TextContent
 
 
 DEFAULT_CONFIG_PATHS = [
@@ -26,9 +27,10 @@ class MCPToolManager:
     def __init__(self, config_path: str | None = None):
         self.config_path = config_path
         self.tools: list[ToolDefinition] = []
-        self._sessions: list[ClientSession] = []
-        self._contexts: list[Any] = []
+        self._clients: list[Client] = []
+        self._exit_stack: AsyncExitStack | None = None
         self._config: dict[str, Any] = {}
+        self._tool_clients: dict[str, Client] = {}
         self._load_config()
 
     def _load_config(self) -> None:
@@ -53,71 +55,70 @@ class MCPToolManager:
 
     async def initialize(self) -> None:
         self.tools = []
-        self._sessions.clear()
-        self._contexts = []
+        self._clients = []
+        self._tool_clients = {}
+        self._exit_stack = None
         servers = self._config.get("mcpServers", {})
-        enabled_servers: list[tuple[str, dict[str, Any], StdioServerParameters]] = []
-        for name, cfg in servers.items():
-            command = cfg.get("command")
-            if not command:
-                continue
-            args = cfg.get("args", [])
-            env = {k: self._resolve_env(v) for k, v in cfg.get("env", {}).items()}
-            params = StdioServerParameters(command=command, args=args, env=env)
-            enabled_servers.append((name, cfg, params))
-            self._contexts.append(stdio_client(params))
-
-        stream_pairs = await asyncio.gather(
-            *[ctx.__aenter__() for ctx in self._contexts], return_exceptions=True
-        )
-
-        for stream_pair, (name, cfg, _) in zip(stream_pairs, enabled_servers):
-            if isinstance(stream_pair, BaseException):
-                continue
-            read, write = stream_pair
-            session = ClientSession(read, write)
-            await session.__aenter__()
-            await session.initialize()
-            list_resp = await session.list_tools()
-            for tool in list_resp.tools:
-                self.tools.append(
-                    ToolDefinition(
-                        name=tool.name,
-                        description=tool.description or "",
-                        parameters=tool.input_schema or {"type": "object", "properties": {}},
+        async with AsyncExitStack() as exit_stack:
+            for name, cfg in servers.items():
+                command = cfg.get("command")
+                if not command:
+                    continue
+                args = cfg.get("args", [])
+                env = {k: self._resolve_env(v) for k, v in cfg.get("env", {}).items()}
+                params = StdioServerParameters(command=command, args=args, env=env)
+                try:
+                    client = Client(params)
+                    await exit_stack.enter_async_context(client)
+                    result = await client.list_tools()
+                except Exception as exc:
+                    print(f"Failed to initialize MCP server '{name}': {exc}")
+                    continue
+                for tool in result.tools:
+                    self.tools.append(
+                        ToolDefinition(
+                            name=tool.name,
+                            description=tool.description or "",
+                            parameters=tool.input_schema or {"type": "object", "properties": {}},
+                        )
                     )
-                )
-            self._sessions.append(session)
+                    self._tool_clients[tool.name] = client
+                self._clients.append(client)
+            self._exit_stack = exit_stack.pop_all()
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        for session in self._sessions:
-            try:
-                resp = await session.call_tool(name, arguments)
-                if getattr(resp, "content", None):
-                    parts = []
-                    for part in resp.content:
-                        if hasattr(part, "text"):
-                            parts.append(part.text)
-                    return "\n".join(parts) if parts else str(resp.content)
-                return str(resp)
-            except Exception:
-                continue
-        return f"Tool '{name}' not found or unavailable."
+        client = self._tool_clients.get(name)
+        if client is None:
+            return f"Tool '{name}' not found or unavailable."
+        try:
+            result = await client.call_tool(name, arguments)
+        except Exception as e:
+            return f"Tool '{name}' failed: {e}"
+        if result.is_error:
+            return f"Tool '{name}' error: {self._extract_text(result.content)}"
+        text = self._extract_text(result.content)
+        if text:
+            return text
+        return str(result.content)
+
+    @staticmethod
+    def _extract_text(content: list[Any]) -> str:
+        parts = []
+        for block in content:
+            if isinstance(block, TextContent):
+                parts.append(block.text)
+        return "\n".join(parts)
 
     async def shutdown(self) -> None:
-        for ctx in reversed(self._contexts):
+        if self._exit_stack is not None:
             try:
-                await ctx.__aexit__(None, None, None)
+                await self._exit_stack.__aexit__(None, None, None)
             except Exception:
                 pass
-        for session in reversed(self._sessions):
-            try:
-                await session.__aexit__(None, None, None)
-            except Exception:
-                pass
-        self._sessions.clear()
+            finally:
+                self._exit_stack = None
+        self._clients = []
         self.tools = []
-        self._contexts = []
 
 
 def to_openai_tools(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
