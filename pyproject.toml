@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codetui"
+version = "0.1.0"
+description = "Simple TUI Coding Agent"
+requires-python = ">=3.9"
+dependencies = [
+    "openai>=1.0",
+    "textual>=0.44.0",
+    "mcp>=1.0",
+]
+
+[project.scripts]
+codetui = "codetui.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
