@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "codetui"
 version = "0.1.0"
 description = "Simple TUI Coding Agent"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "openai>=1.0",
     "textual>=0.44.0",

@@ -1,5 +1,5 @@
-import asyncio
 import json
+import logging
 import os
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -9,6 +9,8 @@ from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 from mcp.types import TextContent
 
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATHS = [
     Path("mcp.json"),
@@ -34,15 +36,16 @@ class MCPToolManager:
         self._load_config()
 
     def _load_config(self) -> None:
-        if self.config_path:
-            paths = [Path(self.config_path)]
-        else:
-            paths = DEFAULT_CONFIG_PATHS
+        paths = [Path(self.config_path)] if self.config_path else DEFAULT_CONFIG_PATHS
         for path in paths:
-            if path.exists():
+            if not path.exists():
+                continue
+            try:
                 with open(path, "r", encoding="utf-8") as fh:
                     self._config = json.load(fh)
                 return
+            except (OSError, ValueError) as exc:
+                logger.warning("Failed to load MCP config '%s': %s", path, exc)
         self._config = {"mcpServers": {}}
 
     def _resolve_env(self, value: Any) -> Any:
@@ -72,7 +75,7 @@ class MCPToolManager:
                     await exit_stack.enter_async_context(client)
                     result = await client.list_tools()
                 except Exception as exc:
-                    print(f"Failed to initialize MCP server '{name}': {exc}")
+                    logger.warning("Failed to initialize MCP server '%s': %s", name, exc)
                     continue
                 for tool in result.tools:
                     self.tools.append(
@@ -126,6 +129,7 @@ def to_openai_tools(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
     for tool in tools:
         parameters = tool.parameters or {"type": "object", "properties": {}}
         if isinstance(parameters, dict):
+            parameters = dict(parameters)
             parameters.setdefault("type", "object")
             parameters.setdefault("properties", {})
         result.append(

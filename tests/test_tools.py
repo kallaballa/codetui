@@ -58,17 +58,9 @@ async def test_tool_manager_initialize_connect_server():
         assert mgr.list_tools()[0].name == "search"
 
 
-def test_tool_manager_call_tool_fallback():
+@pytest.mark.asyncio
+async def test_tool_manager_call_tool_fallback():
     mgr = MCPToolManager()
     mgr._clients = []
-    result = asyncio_get_event_loop().run_until_complete(mgr.call_tool("missing", {}))
+    result = await mgr.call_tool("missing", {})
     assert result == "Tool 'missing' not found or unavailable."
-
-
-def asyncio_get_event_loop():
-    try:
-        return __import__("asyncio").get_event_loop()
-    except RuntimeError:
-        loop = __import__("asyncio").new_event_loop()
-        __import__("asyncio").set_event_loop(loop)
-        return loop
