@@ -3,7 +3,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from rich.markdown import Markdown
 from rich.panel import Panel
