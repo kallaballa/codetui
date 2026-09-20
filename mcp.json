@@ -8,44 +8,20 @@
       "env": {
         "OPENAI_API_KEY": "kilo",
         "OPENAI_BASE_URL": "http://localhost:8788/v1/",
-        "EXPERT_MODEL": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "EXPERT_SYSTEM_PROMPT_FILE": "/home/elchaschab/devel/zwieback4/.expertmcp/system.md"
+        "EXPERT_MODEL": "stepfun/step-3.7-flash:free",
+        "EXPERT_SYSTEM_PROMPT_FILE": "/home/elchaschab/devel/Plan-V4D/.expertmcp/system.md"
       }
     },
-    "v4d-expert": {
-      "command": "node",
+    "ddg-search": {
+      "command": "uvx",
       "args": [
-        "/home/elchaschab/devel/ExpertMCP/dist/index.js"
-      ],
-      "env": {
-        "OPENAI_API_KEY": "kilo",
-        "OPENAI_BASE_URL": "http://localhost:8788/v1/",
-        "EXPERT_MODEL": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "EXPERT_SYSTEM_PROMPT_FILE": "/home/elchaschab/devel/zwieback4/.expertmcp/system-v4d.md"
-      }
-    },
-    "llvm-expert": {
-      "command": "node",
+        "duckduckgo-mcp-server"
+      ]
+    },"desktop-commander": {
+      "command": "npx",
       "args": [
-        "/home/elchaschab/devel/ExpertMCP/dist/index.js"
-      ],
-      "env": {
-        "OPENAI_API_KEY": "kilo",
-        "OPENAI_BASE_URL": "http://localhost:8788/v1/",
-        "EXPERT_MODEL": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "EXPERT_SYSTEM_PROMPT_FILE": "/home/elchaschab/devel/zwieback4/.expertmcp/system-llvm.md"
-      }
-    },
-    "serena": {
-      "command": "serena",
-      "args": [
-        "start-mcp-server",
-        "--project",
-        "/home/elchaschab/devel/codetui",
-        "--context",
-        "ide-assistant",
-        "--transport",
-        "stdio"
+        "-y",
+        "@wonderwhy-er/desktop-commander@latest"
       ]
     }
    }
