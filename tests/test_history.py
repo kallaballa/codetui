@@ -29,18 +29,57 @@ def test_load_history_missing_or_invalid(tmp_path):
     assert load_history(not_list) == []
 
 
-def test_load_history_drops_invalid_messages_but_keeps_tools(tmp_path):
+def test_load_history_keeps_valid_tool_calls_drops_orphans(tmp_path):
     path = tmp_path / "history.json"
     path.write_text(
         '[{"role": "user", "content": "ok"},'
-        ' {"role": "tool", "content": "secret"},'
+        ' {"role": "assistant", "content": null, "tool_calls": '
+        '[{"id": "c1", "type": "function", "function": {"name": "t1", "arguments": "{}"}}]},'
+        ' {"role": "tool", "tool_call_id": "c1", "content": "kept"},'
+        ' {"role": "tool", "content": "orphan-no-id"},'
+        ' {"role": "tool", "tool_call_id": "c2", "content": "unmatched"},'
         ' {"role": "assistant", "content": 5},'
         ' "nope"]'
     )
     assert load_history(path) == [
         {"role": "user", "content": "ok"},
-        {"role": "tool", "content": "secret"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "t1", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "kept"},
     ]
+
+
+def test_save_and_load_history_roundtrip_preserves_tool_calls(tmp_path):
+    path = tmp_path / "history.json"
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "t1", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        {"role": "assistant", "content": "done"},
+    ]
+    save_history(path, messages)
+    normalized = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "t1", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        {"role": "assistant", "content": "done"},
+    ]
+    assert load_history(path) == normalized
 
 
 async def test_agent_persists_and_clears_history(tmp_path):
@@ -63,6 +102,30 @@ async def test_agent_persists_and_clears_history(tmp_path):
         agent.clear_history()
         assert agent.history == []
         assert load_history(path) == []
+
+
+def test_load_history_assigns_id_to_unmatched_tool_result(tmp_path):
+    path = tmp_path / "history.json"
+    path.write_text(
+        '[{"role": "assistant", "tool_calls": '
+        '[{"id": "c1", "type": "function", "function": {"name": "t1", "arguments": "{}"}}]},'
+        ' {"role": "tool", "content": "orphan result"}]'
+    )
+    assert load_history(path) == [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "t1", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "orphan result"},
+    ]
+
+
+def test_load_history_drops_unmatched_tool_result_when_no_pending(tmp_path):
+    path = tmp_path / "history.json"
+    path.write_text('[{"role": "tool", "content": "no matching assistant"}]')
+    assert load_history(path) == []
 
 
 def test_save_and_load_prompt_history_roundtrip(tmp_path):

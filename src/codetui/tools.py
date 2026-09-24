@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
@@ -9,8 +10,9 @@ from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 from mcp.types import TextContent
 
-
 logger = logging.getLogger(__name__)
+
+ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 DEFAULT_CONFIG_PATHS = [
     Path("mcp.json"),
@@ -49,9 +51,11 @@ class MCPToolManager:
         self._config = {"mcpServers": {}}
 
     def _resolve_env(self, value: Any) -> Any:
-        if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-            return os.environ.get(value[2:-1], "")
-        return value
+        if not isinstance(value, str):
+            return value
+        return ENV_PATTERN.sub(
+            lambda m: os.environ.get(m.group(1), m.group(0)), value
+        )
 
     def list_tools(self) -> list[ToolDefinition]:
         return list(self.tools)
@@ -61,13 +65,15 @@ class MCPToolManager:
         self._clients = []
         self._tool_clients = {}
         self._exit_stack = None
+        seen_names: set[str] = set()
         servers = self._config.get("mcpServers", {})
         async with AsyncExitStack() as exit_stack:
             for name, cfg in servers.items():
                 command = cfg.get("command")
                 if not command:
                     continue
-                args = cfg.get("args", [])
+                command = self._resolve_env(command)
+                args = [self._resolve_env(arg) for arg in cfg.get("args", [])]
                 env = {k: self._resolve_env(v) for k, v in cfg.get("env", {}).items()}
                 params = StdioServerParameters(command=command, args=args, env=env)
                 try:
@@ -78,6 +84,12 @@ class MCPToolManager:
                     logger.warning("Failed to initialize MCP server '%s': %s", name, exc)
                     continue
                 for tool in result.tools:
+                    if tool.name in seen_names:
+                        logger.warning(
+                            "Ignoring duplicate tool '%s' from server '%s'", tool.name, name
+                        )
+                        continue
+                    seen_names.add(tool.name)
                     self.tools.append(
                         ToolDefinition(
                             name=tool.name,

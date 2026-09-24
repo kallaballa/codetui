@@ -254,6 +254,48 @@ async def test_status_shows_running_tool():
         assert "Running: search" not in str(status.content)
 
 
+@pytest.mark.asyncio
+async def test_tool_result_attached_to_matching_view():
+    agent = DummyAgent()
+    tui = TUI(agent=agent)
+    async with tui.run_test() as pilot:
+        tui._on_tool_event({"type": "tool_start", "name": "read", "arguments": {}})
+        tui._on_tool_event({"type": "tool_start", "name": "grep", "arguments": {}})
+        await pilot.pause()
+        assert [v.tool_name for v in tui._tool_views] == ["read", "grep"]
+
+        tui._on_tool_event({"type": "tool_end", "name": "grep", "result": "grep result"})
+        tui._on_tool_event({"type": "tool_end", "name": "read", "result": "read result"})
+        await pilot.pause()
+
+        read_view, grep_view = tui._tool_views
+        assert read_view.result_text == "read result"
+        assert grep_view.result_text == "grep result"
+        assert not tui._active_tool
+
+
+@pytest.mark.asyncio
+async def test_tool_call_expanded_preserves_whitespace():
+    agent = DummyAgent()
+    tui = TUI(agent=agent)
+    async with tui.run_test() as pilot:
+        tui._on_tool_event(
+            {"type": "tool_start", "name": "read", "arguments": {"path": "a.txt"}}
+        )
+        tui._on_tool_event(
+            {"type": "tool_end", "name": "read", "result": "line one\n\n  indented line"}
+        )
+        await pilot.pause()
+        view = tui.query_one(ToolCallView)
+        assert view.result_text == "line one\n\n  indented line"
+        view.toggle_expand()
+        await pilot.pause()
+        assert view.expanded
+        rendered = chat_text(tui)
+        assert "indented line" in rendered
+        assert "line one indented line" not in rendered
+
+
 class BlockingAgent(DummyAgent):
     def __init__(self):
         super().__init__()

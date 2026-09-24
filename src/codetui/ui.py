@@ -23,10 +23,10 @@ from textual.widgets import (
     Static,
     TextArea,
 )
+from textual.worker import Worker
 
 from .agent import Agent
 from .history import load_prompt_history, save_prompt_history
-
 
 ROLE_STYLES = {"You": "cyan", "Assistant": "green", "System": "yellow", "Error": "red"}
 
@@ -197,6 +197,10 @@ class ToolCallView(Static):
         text = " ".join(text.split())
         return text if len(text) <= limit else f"{text[:limit]}..."
 
+    @staticmethod
+    def _truncate(text: str, limit: int) -> str:
+        return text if len(text) <= limit else f"{text[:limit]}..."
+
     def toggle_expand(self) -> None:
         self.expanded = not self.expanded
         self._refresh_panel()
@@ -213,44 +217,54 @@ class ToolCallView(Static):
         text = (self.result_text or "").strip().lower()
         return bool(text) and text.startswith(("error", "failed", "timeout"))
 
+    def _border_style(self) -> str:
+        if self._is_error():
+            return self.ERROR_BORDER
+        if self.result_text is not None:
+            return self.OK_BORDER
+        return self.TOOL_BORDER
+
+    def _collapsed_line(self) -> Text:
+        style = (
+            "bold red"
+            if self._is_error()
+            else "bold green"
+            if self.result_text is not None
+            else "bold magenta"
+        )
+        line = Text()
+        line.append("▸ ", style="dim")
+        line.append(f"Tool: {self.tool_name}", style=style)
+        if self.result_text is None:
+            line.append(f"  ·  running {self._duration()}", style="dim italic")
+            line.append("  (running...)", style="dim")
+        else:
+            line.append(f"  ·  {self._clip(self.result_text, 120)}", style="dim")
+            line.append("  (click to expand)", style="dim")
+        return line
+
+    def _expanded_panel(self) -> Panel:
+        border_style = self._border_style()
+        body = Text(f"args: {self._truncate(self.argument_text, self.EXPANDED_LIMIT)}")
+        if self.result_text is None:
+            body.append(f"\nRunning for {self._duration()}...", style="dim italic")
+        else:
+            body.append(f"\nresult: {self._truncate(self.result_text, self.EXPANDED_LIMIT)}")
+        return Panel(
+            body,
+            title=Text(f"Tool: {self.tool_name}", style="bold " + border_style),
+            title_align="left",
+            subtitle=Text("click to collapse", style="dim"),
+            subtitle_align="right",
+            border_style=border_style,
+            padding=(0, 1),
+        )
+
     def _refresh_panel(self) -> None:
         if self.expanded:
-            body = Text(f"args: {self._clip(self.argument_text, self.EXPANDED_LIMIT)}")
-            if self.result_text is None:
-                body.append(f"\nRunning for {self._duration()}...", style="dim italic")
-            else:
-                body.append(f"\nresult: {self._clip(self.result_text, self.EXPANDED_LIMIT)}")
-            subtitle = "click to collapse"
+            self.update(self._expanded_panel())
         else:
-            body = Text(f"args: {self._clip(self.argument_text, self.COLLAPSED_LIMIT)}")
-            if self.result_text is None:
-                body.append(f"\nRunning for {self._duration()}...", style="dim italic")
-            else:
-                body.append(f"\nresult: {self._clip(self.result_text, self.COLLAPSED_LIMIT)}")
-            subtitle = (
-                "click to expand"
-                if self.result_text is not None
-                else "running..."
-            )
-        if self._is_error():
-            border_style = self.ERROR_BORDER
-        elif self.result_text is not None:
-            border_style = self.OK_BORDER
-        else:
-            border_style = self.TOOL_BORDER
-        title_style = "bold " + border_style
-        subtitle_style = "bold dim" if self.result_text is not None and self._is_error() else "dim"
-        self.update(
-            Panel(
-                body,
-                title=Text(f"Tool: {self.tool_name}", style=title_style),
-                title_align="left",
-                subtitle=Text(subtitle, style=subtitle_style),
-                subtitle_align="right",
-                border_style=border_style,
-                padding=(0, 1),
-            )
-        )
+            self.update(self._collapsed_line())
 
     def on_click(self, event: events.Click) -> None:
         self.toggle_expand()
@@ -432,7 +446,7 @@ class TUI(App):
         self._interrupted = False
         self._active_tool: str | None = None
         self._tool_views: list[ToolCallView] = []
-        self._response_worker = None
+        self._response_worker: Worker[None] | None = None
         self._spinner_index = 0
         setter = getattr(self.agent, "set_listener", None)
         if callable(setter):
@@ -458,12 +472,15 @@ class TUI(App):
         self._load_conversation()
         self._update_status()
         self._initialize_tools()
+        self._fetch_models()
         self.set_interval(0.1, self._tick_spinner)
 
     def _tick_spinner(self) -> None:
         if self._sending or self._tools_loading or self._active_tool:
             self._spinner_index = (self._spinner_index + 1) % len(SPINNER_FRAMES)
             try:
+                if self._active_tool and self._tool_views:
+                    self._tool_views[-1]._refresh_panel()
                 self._update_status()
             except Exception:
                 pass
@@ -531,7 +548,9 @@ class TUI(App):
     def action_clear_chat(self) -> None:
         self.query_one("#chat", ChatScroll).remove_children()
         self._tool_views = []
-        self._write_message("System", "View cleared. Conversation context is preserved.", force_scroll=True)
+        self._write_message(
+            "System", "View cleared. Conversation context is preserved.", force_scroll=True
+        )
 
     def action_new_conversation(self) -> None:
         clear = getattr(self.agent, "clear_history", None)
@@ -566,9 +585,13 @@ class TUI(App):
             chat.mount(view)
             chat.follow_tail()
         elif kind == "tool_end":
-            if self._tool_views:
-                self._tool_views[-1].set_result(event.get("result", ""))
-            self._active_tool = None
+            result = event.get("result", "")
+            for view in reversed(self._tool_views):
+                if view.tool_name == name and view.result_text is None:
+                    view.set_result(result)
+                    break
+            if self._active_tool == name:
+                self._active_tool = None
             self._update_status()
 
     def _initialize_tools(self) -> None:
@@ -583,10 +606,35 @@ class TUI(App):
         self._update_status()
         self.run_worker(self._init_tools_worker(), name="init-tools", exclusive=True)
 
-    async def _init_tools_worker(self) -> None:
+    def _fetch_models(self) -> None:
+        models = getattr(getattr(self.agent, "client", None), "models", None)
+        if not hasattr(models, "list"):
+            return
+        self.run_worker(self._fetch_models_worker(), name="fetch-models")
+
+    async def _fetch_models_worker(self) -> None:
         try:
-            await self.agent.tool_manager.initialize()
-            self.tool_count = len(self.agent.tool_manager.list_tools())
+            result = await self.agent.client.models.list()
+        except Exception as exc:
+            self._write_message(
+                "System", f"Could not fetch models: {exc}", force_scroll=True
+            )
+            return
+        ids: list[str] = []
+        for model in result:
+            model_id = getattr(model, "id", None)
+            if isinstance(model_id, str):
+                ids.append(model_id)
+        if ids:
+            self.models = list(dict.fromkeys([self.agent.model, *ids]))
+
+    async def _init_tools_worker(self) -> None:
+        manager = self.agent.tool_manager
+        if manager is None:
+            return
+        try:
+            await manager.initialize()
+            self.tool_count = len(manager.list_tools())
         except Exception as e:
             self._write_message("Error", f"Failed to initialize tools: {e}", force_scroll=True)
         finally:
@@ -655,10 +703,14 @@ class TUI(App):
         if not content:
             return
         if self._tools_loading:
-            self._write_message("System", "Tools are still loading, please wait...", force_scroll=True)
+            self._write_message(
+                "System", "Tools are still loading, please wait...", force_scroll=True
+            )
             return
         if self._sending:
-            self._write_message("System", "Please wait for the current response.", force_scroll=True)
+            self._write_message(
+                "System", "Please wait for the current response.", force_scroll=True
+            )
             return
         input_widget = self.query_one("#input", PromptInput)
         input_widget.value = ""
@@ -687,6 +739,7 @@ class TUI(App):
             widget: Static | None = None
             buffer = ""
             last_refresh = 0.0
+            last_rendered_len = 0
             first_token = True
             agen = stream(content)
             try:
@@ -699,8 +752,12 @@ class TUI(App):
                         chat.follow_tail()
                     buffer += token
                     now = time.monotonic()
-                    if widget is not None and now - last_refresh >= STREAM_UPDATE_INTERVAL:
+                    if widget is not None and (
+                        now - last_refresh >= STREAM_UPDATE_INTERVAL
+                        or len(buffer) - last_rendered_len >= 512
+                    ):
                         last_refresh = now
+                        last_rendered_len = len(buffer)
                         widget.update(
                             self._message_renderable("Assistant", buffer + STREAMING_CURSOR)
                         )
@@ -726,6 +783,17 @@ class TUI(App):
                     chat.follow_tail()
                 except Exception:
                     pass
+        except asyncio.CancelledError:
+            self._interrupted = True
+            raise
+        except Exception as exc:
+            self._hide_thinking()
+            try:
+                self._write_message(
+                    "Error", f"Request failed: {exc}", force_scroll=True
+                )
+            except Exception:
+                pass
         finally:
             self._sending = False
             try:
